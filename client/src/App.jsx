@@ -79,6 +79,7 @@ function App() {
       return matchesStatus && (!query || text.includes(query));
     });
   }, [tasks, statusFilter, taskSearch]);
+  const hasTaskFilter = taskSearch.trim().length > 0 || statusFilter !== 'All';
 
   const saveSession = (payload) => {
     localStorage.setItem('teamTaskToken', payload.token);
@@ -502,8 +503,14 @@ function App() {
                 {!filteredTasks.length && (
                   <div className="empty-state">
                     <ListChecks size={32} />
-                    <strong>No matching tasks</strong>
-                    <span>Clear the search or choose another status.</span>
+                    <strong>{hasTaskFilter ? 'No matching tasks' : 'No tasks yet'}</strong>
+                    <span>
+                      {hasTaskFilter
+                        ? 'Clear the search or choose another status.'
+                        : isAdmin
+                          ? 'Create the first task and assign it to a teammate.'
+                          : 'Assigned tasks will appear here.'}
+                    </span>
                   </div>
                 )}
               </div>

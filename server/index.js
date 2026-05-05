@@ -71,6 +71,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
+    account_role TEXT NOT NULL DEFAULT 'Member',
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -113,10 +114,21 @@ db.exec(`
   );
 `);
 
-const signToken = (user) =>
-  jwt.sign({ id: String(user.id), name: user.name, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+const userColumns = db.all('PRAGMA table_info(users)').map((column) => column.name);
+if (!userColumns.includes('account_role')) {
+  db.run("ALTER TABLE users ADD COLUMN account_role TEXT NOT NULL DEFAULT 'Member'");
+}
 
-const publicUser = (user) => ({ id: String(user.id), _id: String(user.id), name: user.name, email: user.email });
+const signToken = (user) =>
+  jwt.sign({ id: String(user.id), name: user.name, email: user.email, accountRole: user.account_role }, JWT_SECRET, { expiresIn: '7d' });
+
+const publicUser = (user) => ({
+  id: String(user.id),
+  _id: String(user.id),
+  name: user.name,
+  email: user.email,
+  accountRole: user.account_role || 'Member'
+});
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -194,7 +206,7 @@ const requireAuth = asyncHandler(async (req, res, next) => {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = await db.get('SELECT id, name, email FROM users WHERE id = ?', payload.id);
+    const user = await db.get('SELECT id, name, email, account_role FROM users WHERE id = ?', payload.id);
     if (!user) return res.status(401).json({ message: 'User no longer exists.' });
     req.user = user;
     next();
@@ -240,6 +252,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, database: 'sqlite' }))
 app.post('/api/auth/signup', asyncHandler(async (req, res) => {
   const { name, password } = req.body;
   const email = normalizeEmail(req.body.email);
+  const accountRole = ['Admin', 'Member'].includes(req.body.accountRole) ? req.body.accountRole : 'Member';
   if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required.' });
   if (String(password).length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
 
@@ -247,8 +260,14 @@ app.post('/api/auth/signup', asyncHandler(async (req, res) => {
   if (existing) return res.status(409).json({ message: 'Email is already registered.' });
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const result = await db.run('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)', name.trim(), email, passwordHash);
-  const user = await db.get('SELECT id, name, email FROM users WHERE id = ?', result.lastID);
+  const result = await db.run(
+    'INSERT INTO users (name, email, account_role, password_hash) VALUES (?, ?, ?, ?)',
+    name.trim(),
+    email,
+    accountRole,
+    passwordHash
+  );
+  const user = await db.get('SELECT id, name, email, account_role FROM users WHERE id = ?', result.lastID);
   res.status(201).json({ token: signToken(user), user: publicUser(user) });
 }));
 
@@ -262,8 +281,39 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
 
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }));
 
+app.patch('/api/profile', requireAuth, asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const email = normalizeEmail(req.body.email);
+  const accountRole = ['Admin', 'Member'].includes(req.body.accountRole) ? req.body.accountRole : req.user.account_role;
+  const password = String(req.body.password || '');
+
+  if (name.length < 2) return res.status(400).json({ message: 'Name must be at least 2 characters.' });
+  if (!email) return res.status(400).json({ message: 'Email is required.' });
+  if (password && password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+
+  const existing = await db.get('SELECT id FROM users WHERE email = ? AND id != ?', email, req.user.id);
+  if (existing) return res.status(409).json({ message: 'Email is already used by another account.' });
+
+  if (password) {
+    const passwordHash = await bcrypt.hash(password, 12);
+    await db.run(
+      'UPDATE users SET name = ?, email = ?, account_role = ?, password_hash = ? WHERE id = ?',
+      name,
+      email,
+      accountRole,
+      passwordHash,
+      req.user.id
+    );
+  } else {
+    await db.run('UPDATE users SET name = ?, email = ?, account_role = ? WHERE id = ?', name, email, accountRole, req.user.id);
+  }
+
+  const user = await db.get('SELECT id, name, email, account_role FROM users WHERE id = ?', req.user.id);
+  res.json({ token: signToken(user), user: publicUser(user) });
+}));
+
 app.get('/api/users', requireAuth, asyncHandler(async (req, res) => {
-  const users = await db.all('SELECT id, name, email FROM users ORDER BY name');
+  const users = await db.all('SELECT id, name, email, account_role FROM users ORDER BY name');
   res.json(users.map(publicUser));
 }));
 

@@ -31,6 +31,11 @@ const emptyTask = {
 
 const statuses = ['All', 'To Do', 'In Progress', 'Done'];
 const TOUR_VERSION = '2026-05-05';
+const accountRoleOptions = [
+  { value: 'Admin', label: 'Admin' },
+  { value: 'Member', label: 'User' },
+  { value: 'Both', label: 'Admin + User' }
+];
 
 function App() {
   const [authMode, setAuthMode] = useState('login');
@@ -53,14 +58,49 @@ function App() {
   const [taskSearch, setTaskSearch] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [busyAction, setBusyAction] = useState('');
+  const [workspaceMode, setWorkspaceMode] = useState('All');
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
   const [tourBooted, setTourBooted] = useState(false);
 
-  const selectedProject = projects.find((project) => project._id === selectedProjectId);
+  const availableWorkspaceModes = useMemo(() => {
+    const roles = new Set(projects.map((project) => getProjectRole(project, user?.id)).filter(Boolean));
+    const modes = [];
+
+    if (roles.size > 1 || user?.accountRole === 'Both') {
+      modes.push({ value: 'All', label: 'All work' });
+    }
+    if (roles.has('Admin') || user?.accountRole === 'Admin' || user?.accountRole === 'Both') {
+      modes.push({ value: 'Admin', label: 'Admin' });
+    }
+    if (roles.has('Member') || user?.accountRole === 'Member' || user?.accountRole === 'Both') {
+      modes.push({ value: 'Member', label: 'User' });
+    }
+
+    return modes.length ? modes : [{ value: 'All', label: 'All work' }];
+  }, [projects, user]);
+
+  const filteredProjects = useMemo(() => {
+    if (workspaceMode === 'All') return projects;
+    return projects.filter((project) => getProjectRole(project, user?.id) === workspaceMode);
+  }, [projects, user, workspaceMode]);
+
+  const selectedProject = filteredProjects.find((project) => project._id === selectedProjectId) || null;
   const currentMembership = selectedProject?.members.find((member) => member.user._id === user?.id);
   const isAdmin = currentMembership?.role === 'Admin';
   const projectMembers = useMemo(() => selectedProject?.members || [], [selectedProject]);
+  const canSwitchWorkspaceMode = availableWorkspaceModes.length > 1;
+  const isBusy = (key) => busyAction === key;
+  const workspaceHeading = selectedProject
+    ? isAdmin
+      ? 'Admin workspace'
+      : 'Member workspace'
+    : workspaceMode === 'Admin'
+      ? 'Admin workspace'
+      : workspaceMode === 'Member'
+        ? 'User workspace'
+        : 'Shared workspace';
 
   const projectStats = useMemo(() => {
     const byStatus = { 'To Do': 0, 'In Progress': 0, Done: 0 };
@@ -101,6 +141,15 @@ function App() {
         title: 'Profile settings',
         body: 'Use this button to edit your name, email, password, and account type whenever you need to update your personal details.'
       },
+      ...(canSwitchWorkspaceMode
+        ? [
+            {
+              selector: '[data-tour="workspace-switch"]',
+              title: 'Switch your context',
+              body: 'One login can move between admin and user contexts. Use this control to focus on admin projects, user projects, or everything together. Inside one project you only hold one role at a time, so you cannot add yourself as both roles in the same workspace.'
+            }
+          ]
+        : []),
       {
         selector: '[data-tour="create-project"]',
         title: 'Create a project',
@@ -139,7 +188,7 @@ function App() {
     }
 
     return steps;
-  }, [isAdmin, selectedProject]);
+  }, [canSwitchWorkspaceMode, isAdmin, selectedProject]);
 
   const hasTaskFilter = taskSearch.trim().length > 0 || statusFilter !== 'All';
 
@@ -152,6 +201,8 @@ function App() {
     setDashboard(null);
     setSelectedProjectId('');
     setMessage('');
+    setBusyAction('');
+    setWorkspaceMode('All');
     setTourOpen(false);
     setTourStep(0);
     setTourBooted(false);
@@ -177,8 +228,8 @@ function App() {
     setSelectedProjectId((current) => current || data[0]?._id || '');
   };
 
-  const loadDashboard = async () => {
-    setDashboard(await api('/api/dashboard'));
+  const loadDashboard = async (mode = workspaceMode) => {
+    setDashboard(await api(`/api/dashboard?mode=${encodeURIComponent(mode)}`));
   };
 
   const loadTasks = async (projectId) => {
@@ -192,8 +243,29 @@ function App() {
   useEffect(() => {
     if (!user) return;
     setProfileForm({ name: user.name, email: user.email, password: '', accountRole: user.accountRole || 'Member' });
-    Promise.all([loadProjects(), loadDashboard()]).catch(handleDataError);
+    const storedWorkspaceMode = localStorage.getItem(`teamTaskWorkspaceMode:${user.id}`);
+    setWorkspaceMode(isWorkspaceMode(storedWorkspaceMode) ? storedWorkspaceMode : defaultWorkspaceMode(user.accountRole));
+    loadProjects().catch(handleDataError);
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    localStorage.setItem(`teamTaskWorkspaceMode:${user.id}`, workspaceMode);
+  }, [user, workspaceMode]);
+
+  useEffect(() => {
+    if (!user) return;
+    const nextMode = availableWorkspaceModes.some((mode) => mode.value === workspaceMode)
+      ? workspaceMode
+      : availableWorkspaceModes[0]?.value || 'All';
+
+    if (nextMode !== workspaceMode) {
+      setWorkspaceMode(nextMode);
+      return;
+    }
+
+    loadDashboard(nextMode).catch(handleDataError);
+  }, [availableWorkspaceModes, user, workspaceMode]);
 
   useEffect(() => {
     if (!user) return;
@@ -201,6 +273,19 @@ function App() {
     setStatusFilter('All');
     loadTasks(selectedProjectId).catch(handleDataError);
   }, [selectedProjectId, user]);
+
+  useEffect(() => {
+    if (!user || activeView !== 'workspace') return;
+
+    if (!filteredProjects.length) {
+      if (selectedProjectId) setSelectedProjectId('');
+      return;
+    }
+
+    if (!filteredProjects.some((project) => project._id === selectedProjectId)) {
+      setSelectedProjectId(filteredProjects[0]._id);
+    }
+  }, [activeView, filteredProjects, selectedProjectId, user]);
 
   useEffect(() => {
     if (!user || activeView !== 'workspace' || tourBooted) return;
@@ -266,21 +351,25 @@ function App() {
   const createProject = async (event) => {
     event.preventDefault();
     setMessage('');
+    setBusyAction('create-project');
     try {
       const project = await api('/api/projects', { method: 'POST', body: JSON.stringify(projectForm) });
       setProjects((current) => [project, ...current]);
       setSelectedProjectId(project._id);
       setActiveView('workspace');
       setProjectForm({ name: '', description: '' });
-      await loadDashboard();
+      await loadDashboard(workspaceMode);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
   const addMember = async (event) => {
     event.preventDefault();
     setMessage('');
+    setBusyAction('add-member');
     try {
       const updated = await api(`/api/projects/${selectedProjectId}/members`, {
         method: 'POST',
@@ -290,24 +379,30 @@ function App() {
       setMemberForm({ email: '', role: 'Member' });
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
   const removeMember = async (memberId) => {
     setMessage('');
+    setBusyAction(`remove-member:${memberId}`);
     try {
       const updated = await api(`/api/projects/${selectedProjectId}/members/${memberId}`, { method: 'DELETE' });
       setProjects((current) => current.map((project) => (project._id === updated._id ? updated : project)));
       await loadTasks(selectedProjectId);
-      await loadDashboard();
+      await loadDashboard(workspaceMode);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
   const createTask = async (event) => {
     event.preventDefault();
     setMessage('');
+    setBusyAction('create-task');
     try {
       const task = await api(`/api/projects/${selectedProjectId}/tasks`, {
         method: 'POST',
@@ -315,34 +410,42 @@ function App() {
       });
       setTasks((current) => [...current, task]);
       setTaskForm({ ...emptyTask, assignedTo: taskForm.assignedTo });
-      await loadDashboard();
+      await loadDashboard(workspaceMode);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
   const updateTaskStatus = async (taskId, status) => {
     setMessage('');
+    setBusyAction(`status:${taskId}`);
     try {
       const updated = await api(`/api/tasks/${taskId}`, {
         method: 'PATCH',
         body: JSON.stringify({ status })
       });
       setTasks((current) => current.map((task) => (task._id === updated._id ? updated : task)));
-      await loadDashboard();
+      await loadDashboard(workspaceMode);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
   const deleteTask = async (taskId) => {
     setMessage('');
+    setBusyAction(`delete-task:${taskId}`);
     try {
       await api(`/api/tasks/${taskId}`, { method: 'DELETE' });
       setTasks((current) => current.filter((task) => task._id !== taskId));
-      await loadDashboard();
+      await loadDashboard(workspaceMode);
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
@@ -350,6 +453,7 @@ function App() {
     event.preventDefault();
     setProfileMessage('');
     setMessage('');
+    setBusyAction('save-profile');
     try {
       const payload = { ...profileForm, password: profileForm.password.trim() };
       const updated = await api('/api/profile', { method: 'PATCH', body: JSON.stringify(payload) });
@@ -360,6 +464,8 @@ function App() {
       setProfileMessage('Profile updated successfully.');
     } catch (error) {
       setProfileMessage(error.message);
+    } finally {
+      setBusyAction('');
     }
   };
 
@@ -415,21 +521,17 @@ function App() {
                 </label>
                 <label>
                   Account type
-                  <div className="choice-grid" role="radiogroup" aria-label="Account type">
-                    <button
-                      type="button"
-                      className={authForm.accountRole === 'Admin' ? 'selected' : ''}
-                      onClick={() => setAuthForm({ ...authForm, accountRole: 'Admin' })}
-                    >
-                      Admin
-                    </button>
-                    <button
-                      type="button"
-                      className={authForm.accountRole === 'Member' ? 'selected' : ''}
-                      onClick={() => setAuthForm({ ...authForm, accountRole: 'Member' })}
-                    >
-                      User
-                    </button>
+                  <div className="choice-grid triple" role="radiogroup" aria-label="Account type">
+                    {accountRoleOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={authForm.accountRole === option.value ? 'selected' : ''}
+                        onClick={() => setAuthForm({ ...authForm, accountRole: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
                   </div>
                 </label>
               </>
@@ -455,7 +557,8 @@ function App() {
               />
             </label>
             {message && <p className="alert">{message}</p>}
-            <button className="primary wide" disabled={loading}>
+            <button className={`primary wide ${loading ? 'is-loading' : ''}`} disabled={loading} aria-busy={loading}>
+              {loading && <span className="button-spinner" aria-hidden="true" />}
               {loading ? 'Please wait...' : authMode === 'login' ? 'Enter workspace' : 'Create account'}
               <ChevronRight size={18} />
             </button>
@@ -474,7 +577,7 @@ function App() {
           </span>
           <div>
             <strong>Team Tasks</strong>
-            <span>{user.name} - {user.accountRole === 'Admin' ? 'Admin' : 'User'}</span>
+            <span>{user.name} - {accountRoleLabel(user.accountRole)}</span>
           </div>
         </div>
 
@@ -489,6 +592,27 @@ function App() {
         <button type="button" className="ghost wide tour-trigger" onClick={openTour}>
           <CircleHelp size={16} /> View walkthrough
         </button>
+
+        {canSwitchWorkspaceMode && (
+          <section className="mode-switch" data-tour="workspace-switch">
+            <div className="mini-title">
+              <Shield size={16} />
+              <span>View as</span>
+            </div>
+            <div className="segmented compact" role="tablist" aria-label="Workspace mode">
+              {availableWorkspaceModes.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  className={workspaceMode === mode.value ? 'active' : ''}
+                  onClick={() => setWorkspaceMode(mode.value)}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         <form onSubmit={createProject} className="create-project" data-tour="create-project">
           <div className="mini-title">
@@ -506,13 +630,14 @@ function App() {
             value={projectForm.description}
             onChange={(event) => setProjectForm({ ...projectForm, description: event.target.value })}
           />
-          <button className="primary wide">
-            <Plus size={16} /> Create project
+          <button className={`primary wide ${isBusy('create-project') ? 'is-loading' : ''}`} disabled={isBusy('create-project')} aria-busy={isBusy('create-project')}>
+            {isBusy('create-project') && <span className="button-spinner" aria-hidden="true" />}
+            <Plus size={16} /> {isBusy('create-project') ? 'Creating project...' : 'Create project'}
           </button>
         </form>
 
         <nav className="project-list" aria-label="Projects" data-tour="project-list">
-          {projects.map((project) => (
+          {filteredProjects.map((project) => (
             <button
               key={project._id}
               className={selectedProjectId === project._id ? 'selected' : ''}
@@ -525,7 +650,11 @@ function App() {
               <small>{project.members.length} members</small>
             </button>
           ))}
-          {!projects.length && <p className="quiet">No projects yet.</p>}
+          {!filteredProjects.length && (
+            <p className="quiet">
+              {workspaceMode === 'All' ? 'No projects yet.' : `No ${workspaceMode === 'Admin' ? 'admin' : 'user'} projects yet.`}
+            </p>
+          )}
         </nav>
 
         <button className="ghost logout" onClick={logout}>
@@ -541,12 +670,13 @@ function App() {
             setProfileForm={setProfileForm}
             profileMessage={profileMessage}
             updateProfile={updateProfile}
+            saving={isBusy('save-profile')}
           />
         ) : (
           <>
             <header className="topbar">
               <div>
-                <p className="eyebrow">{isAdmin ? 'Admin workspace' : 'Member workspace'}</p>
+                <p className="eyebrow">{workspaceHeading}</p>
                 <h1>{selectedProject?.name || 'Create your first project'}</h1>
                 <p className="muted">{selectedProject?.description || 'Your dashboard will come alive once a project is created.'}</p>
               </div>
@@ -649,8 +779,9 @@ function App() {
                         value={taskForm.description}
                         onChange={(event) => setTaskForm({ ...taskForm, description: event.target.value })}
                       />
-                      <button className="primary">
-                        <Plus size={16} /> Create task
+                      <button className={`primary ${isBusy('create-task') ? 'is-loading' : ''}`} disabled={isBusy('create-task')} aria-busy={isBusy('create-task')}>
+                        {isBusy('create-task') && <span className="button-spinner" aria-hidden="true" />}
+                        <Plus size={16} /> {isBusy('create-task') ? 'Creating task...' : 'Create task'}
                       </button>
                     </form>
                   )}
@@ -677,14 +808,25 @@ function App() {
                           </div>
                         </div>
                         <div className="task-actions">
-                          <select value={task.status} onChange={(event) => updateTaskStatus(task._id, event.target.value)}>
+                          <select
+                            value={task.status}
+                            onChange={(event) => updateTaskStatus(task._id, event.target.value)}
+                            disabled={isBusy(`status:${task._id}`)}
+                          >
                             <option>To Do</option>
                             <option>In Progress</option>
                             <option>Done</option>
                           </select>
                           {isAdmin && (
-                            <button className="text-button danger" title="Delete task" onClick={() => deleteTask(task._id)}>
-                              <Trash2 size={15} /> Delete task
+                            <button
+                              className={`text-button danger ${isBusy(`delete-task:${task._id}`) ? 'is-loading' : ''}`}
+                              title="Delete task"
+                              onClick={() => deleteTask(task._id)}
+                              disabled={isBusy(`delete-task:${task._id}`)}
+                              aria-busy={isBusy(`delete-task:${task._id}`)}
+                            >
+                              {isBusy(`delete-task:${task._id}`) && <span className="button-spinner" aria-hidden="true" />}
+                              <Trash2 size={15} /> {isBusy(`delete-task:${task._id}`) ? 'Deleting...' : 'Delete task'}
                             </button>
                           )}
                         </div>
@@ -728,8 +870,14 @@ function App() {
                           <option>Member</option>
                           <option>Admin</option>
                         </select>
-                        <button className="text-button add-member" title="Add member">
-                          <UserPlus size={16} /> Add teammate
+                        <button
+                          className={`text-button add-member ${isBusy('add-member') ? 'is-loading' : ''}`}
+                          title="Add member"
+                          disabled={isBusy('add-member')}
+                          aria-busy={isBusy('add-member')}
+                        >
+                          {isBusy('add-member') && <span className="button-spinner" aria-hidden="true" />}
+                          <UserPlus size={16} /> {isBusy('add-member') ? 'Adding teammate...' : 'Add teammate'}
                         </button>
                       </form>
                     )}
@@ -745,8 +893,15 @@ function App() {
                           <div className="row-actions">
                             <small>{member.role}</small>
                             {isAdmin && member.user._id !== selectedProject.createdBy && (
-                              <button className="text-button danger" title="Remove member" onClick={() => removeMember(member.user._id)}>
-                                <Trash2 size={15} /> Remove teammate
+                              <button
+                                className={`text-button danger ${isBusy(`remove-member:${member.user._id}`) ? 'is-loading' : ''}`}
+                                title="Remove member"
+                                onClick={() => removeMember(member.user._id)}
+                                disabled={isBusy(`remove-member:${member.user._id}`)}
+                                aria-busy={isBusy(`remove-member:${member.user._id}`)}
+                              >
+                                {isBusy(`remove-member:${member.user._id}`) && <span className="button-spinner" aria-hidden="true" />}
+                                <Trash2 size={15} /> {isBusy(`remove-member:${member.user._id}`) ? 'Removing...' : 'Remove teammate'}
                               </button>
                             )}
                           </div>
@@ -801,7 +956,7 @@ function App() {
   );
 }
 
-function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile }) {
+function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile, saving }) {
   return (
     <section className="profile-page">
       <header className="topbar">
@@ -811,7 +966,7 @@ function ProfilePage({ user, profileForm, setProfileForm, profileMessage, update
           <p className="muted">Update your account details and workspace identity.</p>
         </div>
         <span className="role-pill">
-          <UserCircle size={16} /> {user.accountRole === 'Admin' ? 'Admin account' : 'User account'}
+          <UserCircle size={16} /> {accountRoleLabel(user.accountRole)} account
         </span>
       </header>
 
@@ -835,6 +990,7 @@ function ProfilePage({ user, profileForm, setProfileForm, profileMessage, update
           <select value={profileForm.accountRole} onChange={(event) => setProfileForm({ ...profileForm, accountRole: event.target.value })}>
             <option value="Admin">Admin</option>
             <option value="Member">User</option>
+            <option value="Both">Admin + User</option>
           </select>
         </label>
         <label>
@@ -848,8 +1004,9 @@ function ProfilePage({ user, profileForm, setProfileForm, profileMessage, update
           />
         </label>
         {profileMessage && <p className={profileMessage.includes('success') ? 'success' : 'alert'}>{profileMessage}</p>}
-        <button className="primary profile-submit">
-          <Save size={16} /> Save profile changes
+        <button className={`primary profile-submit ${saving ? 'is-loading' : ''}`} disabled={saving} aria-busy={saving}>
+          {saving && <span className="button-spinner" aria-hidden="true" />}
+          <Save size={16} /> {saving ? 'Saving profile...' : 'Save profile changes'}
         </button>
       </form>
     </section>
@@ -1007,6 +1164,26 @@ function getTourHighlightStyle(targetRect) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getProjectRole(project, userId) {
+  return project?.members?.find((member) => member.user._id === userId)?.role || null;
+}
+
+function defaultWorkspaceMode(accountRole) {
+  if (accountRole === 'Admin') return 'Admin';
+  if (accountRole === 'Member') return 'Member';
+  return 'All';
+}
+
+function isWorkspaceMode(value) {
+  return value === 'All' || value === 'Admin' || value === 'Member';
+}
+
+function accountRoleLabel(accountRole) {
+  if (accountRole === 'Admin') return 'Admin';
+  if (accountRole === 'Both') return 'Admin + User';
+  return 'User';
 }
 
 export default App;

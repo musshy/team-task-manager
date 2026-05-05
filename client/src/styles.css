@@ -29,6 +29,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.5;
   font-weight: 400;
 }
 
@@ -91,14 +93,14 @@ p {
 
 h1 {
   max-width: 780px;
-  font-size: 2rem;
+  font-size: clamp(1.9rem, 1.65rem + 0.8vw, 2.35rem);
   font-weight: 700;
-  line-height: 1.04;
+  line-height: 1.08;
   letter-spacing: 0;
 }
 
 h2 {
-  font-size: 1.04rem;
+  font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -266,6 +268,10 @@ h2 {
   gap: 0.5rem;
 }
 
+.choice-grid.triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .choice-grid button {
   min-height: 46px;
   border: 1px solid var(--line);
@@ -306,22 +312,28 @@ h2 {
 
 .primary,
 .ghost,
-.icon-button {
+.icon-button,
+.text-button,
+.sidebar-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  border: 0;
   border-radius: 8px;
   min-height: 44px;
   font-weight: 700;
+  will-change: transform;
   transition:
     transform 160ms ease,
     box-shadow 160ms ease,
-    background 160ms ease;
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
 }
 
 .primary {
+  border: 0;
   background: linear-gradient(135deg, #245b42, #173f2f);
   color: #ffffff;
   padding: 0.78rem 1rem;
@@ -330,14 +342,44 @@ h2 {
 
 .primary:hover,
 .ghost:hover,
-.icon-button:hover {
+.icon-button:hover,
+.text-button:hover,
+.sidebar-action:hover {
   transform: translateY(-1px);
 }
 
-.primary:disabled {
+.primary:hover {
+  box-shadow: 0 16px 34px rgba(36, 91, 66, 0.28);
+}
+
+.primary:active,
+.ghost:active,
+.icon-button:active,
+.text-button:active,
+.sidebar-action:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.primary:disabled,
+.ghost:disabled,
+.icon-button:disabled,
+.text-button:disabled,
+.sidebar-action:disabled,
+.is-loading {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.68;
   transform: none;
+  box-shadow: none;
+}
+
+.primary:focus-visible,
+.ghost:focus-visible,
+.icon-button:focus-visible,
+.text-button:focus-visible,
+.sidebar-action:focus-visible {
+  outline: 3px solid rgba(36, 91, 66, 0.18);
+  outline-offset: 2px;
 }
 
 .wide {
@@ -345,12 +387,22 @@ h2 {
 }
 
 .ghost {
+  border: 1px solid transparent;
   color: #344039;
   background: #eef2ed;
   padding: 0.72rem 0.9rem;
 }
 
+.ghost:hover,
+.text-button:hover,
+.sidebar-action:hover,
+.choice-grid button:hover {
+  border-color: rgba(36, 91, 66, 0.2);
+  box-shadow: 0 12px 24px rgba(23, 32, 28, 0.06);
+}
+
 .icon-button {
+  border: 0;
   width: 44px;
   flex: 0 0 44px;
   color: var(--ink);
@@ -428,10 +480,6 @@ h2 {
 }
 
 .sidebar-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.5rem;
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -441,6 +489,7 @@ h2 {
   color: #344039;
   font-weight: 600;
   box-shadow: 0 10px 24px rgba(25, 32, 28, 0.04);
+  justify-content: flex-start;
 }
 
 .sidebar-action.active {
@@ -451,6 +500,25 @@ h2 {
 
 .tour-trigger {
   justify-content: flex-start;
+}
+
+.mode-switch {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 12px 30px rgba(25, 32, 28, 0.05);
+}
+
+.segmented.compact {
+  gap: 0.2rem;
+}
+
+.segmented.compact button {
+  padding: 0.62rem 0.5rem;
+  font-size: 0.86rem;
 }
 
 .create-project {
@@ -906,10 +974,6 @@ h2 {
 }
 
 .text-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -930,6 +994,16 @@ h2 {
   width: 100%;
   background: #eef2ed;
   color: var(--green);
+}
+
+.button-spinner {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 0.95rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: button-spin 0.7s linear infinite;
 }
 
 .workload-row {
@@ -1069,6 +1143,12 @@ h2 {
 .tour-controls {
   justify-content: space-between;
   flex-wrap: wrap;
+}
+
+@keyframes button-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 1320px) {

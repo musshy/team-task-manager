@@ -252,7 +252,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, database: 'sqlite' }))
 app.post('/api/auth/signup', asyncHandler(async (req, res) => {
   const { name, password } = req.body;
   const email = normalizeEmail(req.body.email);
-  const accountRole = ['Admin', 'Member'].includes(req.body.accountRole) ? req.body.accountRole : 'Member';
+  const accountRole = ['Admin', 'Member', 'Both'].includes(req.body.accountRole) ? req.body.accountRole : 'Member';
   if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required.' });
   if (String(password).length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
 
@@ -284,7 +284,7 @@ app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(r
 app.patch('/api/profile', requireAuth, asyncHandler(async (req, res) => {
   const name = String(req.body.name || '').trim();
   const email = normalizeEmail(req.body.email);
-  const accountRole = ['Admin', 'Member'].includes(req.body.accountRole) ? req.body.accountRole : req.user.account_role;
+  const accountRole = ['Admin', 'Member', 'Both'].includes(req.body.accountRole) ? req.body.accountRole : req.user.account_role;
   const password = String(req.body.password || '');
 
   if (name.length < 2) return res.status(400).json({ message: 'Name must be at least 2 characters.' });
@@ -480,6 +480,7 @@ app.delete('/api/tasks/:taskId', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
+  const mode = ['Admin', 'Member'].includes(req.query.mode) ? req.query.mode : 'All';
   const projects = await db.all(
     `SELECT p.*, pm.role
      FROM projects p
@@ -487,7 +488,8 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
      WHERE pm.user_id = ?`,
     req.user.id
   );
-  const projectIds = projects.map((project) => project.id);
+  const scopedProjects = mode === 'All' ? projects : projects.filter((project) => project.role === mode);
+  const projectIds = scopedProjects.map((project) => project.id);
   if (!projectIds.length) {
     return res.json({ totalTasks: 0, byStatus: { 'To Do': 0, 'In Progress': 0, Done: 0 }, perUser: {}, overdue: 0, projectCount: 0 });
   }
@@ -502,7 +504,7 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
     projectIds
   );
 
-  const adminProjects = new Set(projects.filter((project) => project.role === 'Admin').map((project) => String(project.id)));
+  const adminProjects = new Set(scopedProjects.filter((project) => project.role === 'Admin').map((project) => String(project.id)));
   const visibleTasks = rows.filter(
     (task) => adminProjects.has(String(task.project_id)) || String(task.assigned_to) === String(req.user.id)
   );
@@ -517,7 +519,7 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
     if (task.status !== 'Done' && new Date(task.due_date) < today) overdue += 1;
   }
 
-  res.json({ totalTasks: visibleTasks.length, byStatus, perUser, overdue, projectCount: projects.length });
+  res.json({ totalTasks: visibleTasks.length, byStatus, perUser, overdue, projectCount: scopedProjects.length });
 }));
 
 if (process.env.NODE_ENV === 'production') {

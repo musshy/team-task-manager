@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Project Task Manager favicon">
+  <rect width="64" height="64" rx="16" fill="#1f6b4b"/>
+  <path
+    d="M20 19.5l3.6 3.6 6.2-7.1M31 20h13M31 29h13M20 31.5l3.6 3.6 6.2-7.1M20 43.5l3.6 3.6 6.2-7.1M31 39h13M31 48h13"
+    fill="none"
+    stroke="#ffffff"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="4"
+  />
+</svg>

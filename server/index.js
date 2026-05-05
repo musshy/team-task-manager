@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import initSqlJs from 'sql.js';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -13,10 +14,16 @@ import { fileURLToPath } from 'node:url';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'development-only-secret';
 const isProduction = process.env.NODE_ENV === 'production';
 const PASSWORD_MIN_LENGTH = 6;
 const PASSWORD_MAX_BYTES = 72;
+const configuredJwtSecret = String(process.env.JWT_SECRET || '').trim();
+const hasStrongJwtSecret = configuredJwtSecret.length >= 32;
+const JWT_SECRET = hasStrongJwtSecret
+  ? configuredJwtSecret
+  : isProduction
+    ? randomBytes(32).toString('hex')
+    : 'development-only-secret';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
@@ -24,8 +31,10 @@ const dbFile = path.resolve(process.cwd(), process.env.SQLITE_FILE || 'data/team
 
 fs.mkdirSync(path.dirname(dbFile), { recursive: true });
 
-if (isProduction && (!process.env.JWT_SECRET || JWT_SECRET === 'development-only-secret' || JWT_SECRET.length < 32)) {
-  throw new Error('Set a strong JWT_SECRET in production before starting the server.');
+if (isProduction && !hasStrongJwtSecret) {
+  console.warn(
+    'JWT_SECRET is missing or shorter than 32 characters in production. Using a generated temporary secret for this boot. Set a stable JWT_SECRET in Railway to keep sessions valid across restarts.'
+  );
 }
 
 app.disable('x-powered-by');

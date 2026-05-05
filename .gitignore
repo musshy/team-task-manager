@@ -1,0 +1,12 @@
+node_modules/
+client/dist/
+data/
+.env
+.dev-pids
+.server-job-id
+.server-pid
+*.log
+npm-debug.log*
+.DS_Store
+ambak_pm_assignment_google_maps.md
+temp_repo/

@@ -995,6 +995,17 @@ h2 {
   min-height: 88px;
 }
 
+.task-inline-message,
+.member-inline-message,
+.composer-inline-message {
+  margin: 0;
+}
+
+.task-inline-message,
+.composer-inline-message {
+  grid-column: 1 / -1;
+}
+
 .task-form button {
   grid-column: 1 / -1;
   min-height: 46px;
@@ -1124,6 +1135,10 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 128px;
   gap: 0.5rem;
+}
+
+.member-inline-message {
+  grid-column: 1 / -1;
 }
 
 .member-row {

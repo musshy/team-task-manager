@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -57,6 +58,9 @@ function App() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [taskSearch, setTaskSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [projectMessage, setProjectMessage] = useState('');
+  const [memberMessage, setMemberMessage] = useState('');
+  const [taskMessage, setTaskMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [workspaceMode, setWorkspaceMode] = useState('All');
@@ -204,6 +208,9 @@ function App() {
     setDashboard(null);
     setSelectedProjectId('');
     setMessage('');
+    setProjectMessage('');
+    setMemberMessage('');
+    setTaskMessage('');
     setBusyAction('');
     setWorkspaceMode('All');
     setProjectComposerOpen(false);
@@ -237,9 +244,9 @@ function App() {
       }
 
       try {
-        const data = await api('/api/auth/me');
-        if (cancelled) return;
-        saveSession({ token, user: data.user });
+      const data = await api('/api/auth/me');
+      if (cancelled) return;
+      saveSession({ token, user: data.user });
       } catch (error) {
         clearStoredSession();
         if (!cancelled) {
@@ -360,6 +367,9 @@ function App() {
   const openTour = () => {
     setActiveView('workspace');
     setMessage('');
+    setProjectMessage('');
+    setMemberMessage('');
+    setTaskMessage('');
     setTourStep(0);
     setTourOpen(true);
     setTourBooted(true);
@@ -368,6 +378,7 @@ function App() {
   const openProjectComposer = () => {
     setActiveView('workspace');
     setMessage('');
+    setProjectMessage('');
     setProjectComposerOpen(true);
   };
 
@@ -406,7 +417,7 @@ function App() {
 
   const createProject = async (event) => {
     event.preventDefault();
-    setMessage('');
+    setProjectMessage('');
     setBusyAction('create-project');
     try {
       const project = await api('/api/projects', { method: 'POST', body: JSON.stringify(projectForm) });
@@ -419,7 +430,7 @@ function App() {
       setProjectForm({ name: '', description: '' });
       await loadDashboard(nextMode);
     } catch (error) {
-      setMessage(error.message);
+      setProjectMessage(error.message);
     } finally {
       setBusyAction('');
     }
@@ -427,7 +438,7 @@ function App() {
 
   const addMember = async (event) => {
     event.preventDefault();
-    setMessage('');
+    setMemberMessage('');
     setBusyAction('add-member');
     try {
       const updated = await api(`/api/projects/${selectedProjectId}/members`, {
@@ -437,14 +448,14 @@ function App() {
       setProjects((current) => current.map((project) => (project._id === updated._id ? updated : project)));
       setMemberForm({ email: '', role: 'Member' });
     } catch (error) {
-      setMessage(error.message);
+      setMemberMessage(error.message);
     } finally {
       setBusyAction('');
     }
   };
 
   const removeMember = async (memberId) => {
-    setMessage('');
+    setMemberMessage('');
     setBusyAction(`remove-member:${memberId}`);
     try {
       const updated = await api(`/api/projects/${selectedProjectId}/members/${memberId}`, { method: 'DELETE' });
@@ -452,7 +463,7 @@ function App() {
       await loadTasks(selectedProjectId);
       await loadDashboard(workspaceMode);
     } catch (error) {
-      setMessage(error.message);
+      setMemberMessage(error.message);
     } finally {
       setBusyAction('');
     }
@@ -460,7 +471,7 @@ function App() {
 
   const createTask = async (event) => {
     event.preventDefault();
-    setMessage('');
+    setTaskMessage('');
     setBusyAction('create-task');
     try {
       const task = await api(`/api/projects/${selectedProjectId}/tasks`, {
@@ -471,14 +482,14 @@ function App() {
       setTaskForm({ ...emptyTask, assignedTo: taskForm.assignedTo });
       await loadDashboard(workspaceMode);
     } catch (error) {
-      setMessage(error.message);
+      setTaskMessage(error.message);
     } finally {
       setBusyAction('');
     }
   };
 
   const updateTaskStatus = async (taskId, status) => {
-    setMessage('');
+    setTaskMessage('');
     setBusyAction(`status:${taskId}`);
     try {
       const updated = await api(`/api/tasks/${taskId}`, {
@@ -488,21 +499,21 @@ function App() {
       setTasks((current) => current.map((task) => (task._id === updated._id ? updated : task)));
       await loadDashboard(workspaceMode);
     } catch (error) {
-      setMessage(error.message);
+      setTaskMessage(error.message);
     } finally {
       setBusyAction('');
     }
   };
 
   const deleteTask = async (taskId) => {
-    setMessage('');
+    setTaskMessage('');
     setBusyAction(`delete-task:${taskId}`);
     try {
       await api(`/api/tasks/${taskId}`, { method: 'DELETE' });
       setTasks((current) => current.filter((task) => task._id !== taskId));
       await loadDashboard(workspaceMode);
     } catch (error) {
-      setMessage(error.message);
+      setTaskMessage(error.message);
     } finally {
       setBusyAction('');
     }
@@ -735,6 +746,7 @@ function App() {
             saving={isBusy('save-profile')}
             workspaceMode={workspaceMode}
             openProjectComposer={openProjectComposer}
+            goToWorkspace={() => setActiveView('workspace')}
           />
         ) : (
           <>
@@ -764,13 +776,12 @@ function App() {
               </div>
             </header>
 
-            {message && <p className="alert">{message}</p>}
-
             {showProjectComposer && (
               <ProjectComposer
                 projectForm={projectForm}
                 setProjectForm={setProjectForm}
                 createProject={createProject}
+                projectMessage={projectMessage}
                 busy={isBusy('create-project')}
                 onClose={closeProjectComposer}
                 canClose={hasVisibleProjects}
@@ -834,8 +845,8 @@ function App() {
                     </div>
                   </div>
 
-                  {isAdmin && (
-                    <form onSubmit={createTask} className="task-form">
+                    {isAdmin && (
+                      <form onSubmit={createTask} className="task-form">
                       <input
                         placeholder="Task title"
                         value={taskForm.title}
@@ -870,12 +881,13 @@ function App() {
                         value={taskForm.description}
                         onChange={(event) => setTaskForm({ ...taskForm, description: event.target.value })}
                       />
-                      <button className={`primary ${isBusy('create-task') ? 'is-loading' : ''}`} disabled={isBusy('create-task')} aria-busy={isBusy('create-task')}>
-                        {isBusy('create-task') && <span className="button-spinner" aria-hidden="true" />}
-                        <Plus size={16} /> {isBusy('create-task') ? 'Creating task...' : 'Create task'}
-                      </button>
-                    </form>
-                  )}
+                        <button className={`primary ${isBusy('create-task') ? 'is-loading' : ''}`} disabled={isBusy('create-task')} aria-busy={isBusy('create-task')}>
+                          {isBusy('create-task') && <span className="button-spinner" aria-hidden="true" />}
+                          <Plus size={16} /> {isBusy('create-task') ? 'Creating task...' : 'Create task'}
+                        </button>
+                        {taskMessage && <p className="alert task-inline-message">{taskMessage}</p>}
+                      </form>
+                    )}
 
                   <div className="task-list">
                     {filteredTasks.map((task) => (
@@ -948,8 +960,8 @@ function App() {
                       </div>
                     </div>
 
-                    {isAdmin && (
-                      <form onSubmit={addMember} className="member-form">
+                      {isAdmin && (
+                        <form onSubmit={addMember} className="member-form">
                         <input
                           type="email"
                           placeholder="User email"
@@ -961,17 +973,18 @@ function App() {
                           <option>Member</option>
                           <option>Admin</option>
                         </select>
-                        <button
-                          className={`text-button add-member ${isBusy('add-member') ? 'is-loading' : ''}`}
-                          title="Add member"
+                          <button
+                            className={`text-button add-member ${isBusy('add-member') ? 'is-loading' : ''}`}
+                            title="Add member"
                           disabled={isBusy('add-member')}
                           aria-busy={isBusy('add-member')}
-                        >
-                          {isBusy('add-member') && <span className="button-spinner" aria-hidden="true" />}
-                          <UserPlus size={16} /> {isBusy('add-member') ? 'Adding teammate...' : 'Add teammate'}
-                        </button>
-                      </form>
-                    )}
+                          >
+                            {isBusy('add-member') && <span className="button-spinner" aria-hidden="true" />}
+                            <UserPlus size={16} /> {isBusy('add-member') ? 'Adding teammate...' : 'Add teammate'}
+                          </button>
+                          {memberMessage && <p className="alert member-inline-message">{memberMessage}</p>}
+                        </form>
+                      )}
 
                     <div className="member-list">
                       {projectMembers.map((member) => (
@@ -1056,7 +1069,7 @@ function App() {
   );
 }
 
-function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile, saving, workspaceMode, openProjectComposer }) {
+function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile, saving, workspaceMode, openProjectComposer, goToWorkspace }) {
   return (
     <section className="profile-page">
       <header className="topbar">
@@ -1066,6 +1079,9 @@ function ProfilePage({ user, profileForm, setProfileForm, profileMessage, update
           <p className="muted">Keep your account details current and jump back into work with the right context.</p>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="ghost" onClick={goToWorkspace}>
+            <ArrowLeft size={16} /> Back to workspace
+          </button>
           <UserAccessButton user={user} active />
           <span className="role-pill">
             <UserCircle size={16} /> {accountRoleLabel(user.accountRole)} account
@@ -1179,7 +1195,7 @@ function UserAccessButton({ user, active = false, onClick }) {
   );
 }
 
-function ProjectComposer({ projectForm, setProjectForm, createProject, busy, onClose, canClose, tourId }) {
+function ProjectComposer({ projectForm, setProjectForm, createProject, projectMessage, busy, onClose, canClose, tourId }) {
   return (
     <section className="panel composer-panel" data-tour={tourId}>
       <div className="composer-copy">
@@ -1221,6 +1237,7 @@ function ProjectComposer({ projectForm, setProjectForm, createProject, busy, onC
             <Plus size={16} /> {busy ? 'Creating project...' : 'Create project'}
           </button>
         </div>
+        {projectMessage && <p className="alert composer-inline-message">{projectMessage}</p>}
       </form>
     </section>
   );

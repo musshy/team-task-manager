@@ -4,10 +4,10 @@ import cors from 'cors';
 import morgan from 'morgan';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import initSqlJs from 'sql.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const app = express();
@@ -15,21 +15,56 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-only-secret';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dataDir = path.join(__dirname, '..', 'data');
-const dbFile = process.env.SQLITE_FILE || path.join(dataDir, 'team_task_manager.sqlite');
+const require = createRequire(import.meta.url);
+const dbFile = path.resolve(process.cwd(), process.env.SQLITE_FILE || 'data/team_task_manager.sqlite');
 
-fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(path.dirname(dbFile), { recursive: true });
 
 app.use(cors({ origin: process.env.CLIENT_URL || true, credentials: true }));
 app.use(express.json());
 app.use(morgan('dev'));
 
-const db = await open({
-  filename: dbFile,
-  driver: sqlite3.Database
+const SQL = await initSqlJs({
+  locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm')
 });
 
-await db.exec(`
+const database = fs.existsSync(dbFile) ? new SQL.Database(fs.readFileSync(dbFile)) : new SQL.Database();
+
+const normalizeParams = (params) => (params.length === 1 && Array.isArray(params[0]) ? params[0] : params);
+
+const persistDatabase = () => fs.writeFileSync(dbFile, Buffer.from(database.export()));
+
+const db = {
+  exec(sql) {
+    database.exec(sql);
+    persistDatabase();
+  },
+  run(sql, ...params) {
+    database.run(sql, normalizeParams(params));
+    const result = database.exec('SELECT last_insert_rowid() AS lastID, changes() AS changes')[0];
+    if (!/^\s*BEGIN\b/i.test(sql)) persistDatabase();
+    return {
+      lastID: result?.values?.[0]?.[0] || 0,
+      changes: result?.values?.[0]?.[1] || 0
+    };
+  },
+  all(sql, ...params) {
+    const stmt = database.prepare(sql);
+    const rows = [];
+    try {
+      stmt.bind(normalizeParams(params));
+      while (stmt.step()) rows.push(stmt.getAsObject());
+      return rows;
+    } finally {
+      stmt.free();
+    }
+  },
+  get(sql, ...params) {
+    return this.all(sql, ...params)[0];
+  }
+};
+
+db.exec(`
   PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS users (
@@ -249,21 +284,14 @@ app.post('/api/projects', requireAuth, asyncHandler(async (req, res) => {
   const description = String(req.body.description || '').trim();
   if (name.length < 2) return res.status(400).json({ message: 'Project name must be at least 2 characters.' });
 
-  await db.run('BEGIN');
-  try {
-    const result = await db.run(
-      'INSERT INTO projects (name, description, created_by, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-      name,
-      description,
-      req.user.id
-    );
-    await db.run('INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)', result.lastID, req.user.id, 'Admin');
-    await db.run('COMMIT');
-    res.status(201).json(await rowToProject(await db.get('SELECT * FROM projects WHERE id = ?', result.lastID)));
-  } catch (error) {
-    await db.run('ROLLBACK');
-    throw error;
-  }
+  const result = await db.run(
+    'INSERT INTO projects (name, description, created_by, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+    name,
+    description,
+    req.user.id
+  );
+  await db.run('INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)', result.lastID, req.user.id, 'Admin');
+  res.status(201).json(await rowToProject(await db.get('SELECT * FROM projects WHERE id = ?', result.lastID)));
 }));
 
 app.get('/api/projects/:projectId', requireAuth, asyncHandler(async (req, res) => {

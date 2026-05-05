@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import morgan from 'morgan';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -13,6 +14,9 @@ import { fileURLToPath } from 'node:url';
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-only-secret';
+const isProduction = process.env.NODE_ENV === 'production';
+const PASSWORD_MIN_LENGTH = 6;
+const PASSWORD_MAX_BYTES = 72;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
@@ -20,8 +24,28 @@ const dbFile = path.resolve(process.cwd(), process.env.SQLITE_FILE || 'data/team
 
 fs.mkdirSync(path.dirname(dbFile), { recursive: true });
 
-app.use(cors({ origin: process.env.CLIENT_URL || true, credentials: true }));
-app.use(express.json());
+if (isProduction && (!process.env.JWT_SECRET || JWT_SECRET === 'development-only-secret' || JWT_SECRET.length < 32)) {
+  throw new Error('Set a strong JWT_SECRET in production before starting the server.');
+}
+
+app.disable('x-powered-by');
+app.use(
+  helmet(
+    isProduction
+      ? undefined
+      : {
+          contentSecurityPolicy: false,
+          crossOriginOpenerPolicy: false,
+          strictTransportSecurity: false
+        }
+  )
+);
+
+if (process.env.CLIENT_URL || !isProduction) {
+  app.use(cors({ origin: process.env.CLIENT_URL || true, credentials: true }));
+}
+
+app.use(express.json({ limit: '100kb' }));
 app.use(morgan('dev'));
 
 const SQL = await initSqlJs({
@@ -133,6 +157,7 @@ const publicUser = (user) => ({
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+const passwordBytes = (password) => Buffer.byteLength(String(password || ''), 'utf8');
 
 const rowToProject = async (projectRow) => {
   const members = await db.all(
@@ -207,7 +232,7 @@ const requireAuth = asyncHandler(async (req, res, next) => {
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = await db.get('SELECT id, name, email, account_role FROM users WHERE id = ?', payload.id);
-    if (!user) return res.status(401).json({ message: 'User no longer exists.' });
+    if (!user) return res.status(401).json({ message: 'Session is no longer valid. Please sign in again.' });
     req.user = user;
     next();
   } catch {
@@ -247,14 +272,28 @@ const ensureProjectMember = async (projectId, userId) => {
   return Boolean(member);
 };
 
-app.get('/api/health', (req, res) => res.json({ ok: true, database: 'sqlite' }));
+let shuttingDown = false;
+
+app.get('/api/health', (req, res) =>
+  res.json({
+    ok: !shuttingDown,
+    status: shuttingDown ? 'shutting-down' : 'ready',
+    database: 'sqlite',
+    uptimeSeconds: Math.round(process.uptime())
+  })
+);
 
 app.post('/api/auth/signup', asyncHandler(async (req, res) => {
   const { name, password } = req.body;
   const email = normalizeEmail(req.body.email);
   const accountRole = ['Admin', 'Member', 'Both'].includes(req.body.accountRole) ? req.body.accountRole : 'Member';
   if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required.' });
-  if (String(password).length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+  if (String(password).length < PASSWORD_MIN_LENGTH) {
+    return res.status(400).json({ message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+  }
+  if (passwordBytes(password) > PASSWORD_MAX_BYTES) {
+    return res.status(400).json({ message: `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.` });
+  }
 
   const existing = await db.get('SELECT id FROM users WHERE email = ?', email);
   if (existing) return res.status(409).json({ message: 'Email is already registered.' });
@@ -289,7 +328,12 @@ app.patch('/api/profile', requireAuth, asyncHandler(async (req, res) => {
 
   if (name.length < 2) return res.status(400).json({ message: 'Name must be at least 2 characters.' });
   if (!email) return res.status(400).json({ message: 'Email is required.' });
-  if (password && password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+  if (password && password.length < PASSWORD_MIN_LENGTH) {
+    return res.status(400).json({ message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+  }
+  if (password && passwordBytes(password) > PASSWORD_MAX_BYTES) {
+    return res.status(400).json({ message: `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.` });
+  }
 
   const existing = await db.get('SELECT id FROM users WHERE email = ? AND id != ?', email, req.user.id);
   if (existing) return res.status(409).json({ message: 'Email is already used by another account.' });
@@ -522,6 +566,10 @@ app.get('/api/dashboard', requireAuth, asyncHandler(async (req, res) => {
   res.json({ totalTasks: visibleTasks.length, byStatus, perUser, overdue, projectCount: scopedProjects.length });
 }));
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'API route not found.' });
+});
+
 if (process.env.NODE_ENV === 'production') {
   const distPath = path.join(__dirname, '..', 'client', 'dist');
   app.use(express.static(distPath));
@@ -533,4 +581,22 @@ app.use((err, req, res, next) => {
   res.status(status).json({ message: err.message || 'Something went wrong.' });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT} with SQLite database ${dbFile}`));
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT} with SQLite database ${dbFile}`));
+
+const gracefulShutdown = (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received. Closing HTTP server...`);
+  server.close(() => {
+    console.log('HTTP server closed.');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('Forcing shutdown after timeout.');
+    process.exit(1);
+  }, 10000).unref();
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

@@ -1,16 +1,18 @@
-# Team Task Manager
+# Project Task Manager
 
 A full-stack team task management web app for collaborative project work. Users can sign up, create projects, manage members, assign tasks, update task status, and review team progress from a focused dashboard.
 
 ## Features
 
 - JWT authentication with hashed passwords
+- Session validation on app boot with stale-session cleanup
 - Project creation with creator assigned as `Admin`
 - Project member management by admins
 - Task creation with due date, priority, assignee and status
 - Role-based access control
 - Dashboard with total tasks, tasks by status, tasks per user and overdue tasks
 - React frontend connected to an Express REST API
+- Production security headers with Helmet and graceful shutdown handling
 
 ## Tech Stack
 
@@ -32,7 +34,7 @@ npm install
 
 ```bash
 PORT=5000
-JWT_SECRET=replace-with-a-long-random-secret
+JWT_SECRET=replace-with-a-long-random-secret-at-least-32-characters
 CLIENT_URL=http://localhost:5173
 SQLITE_FILE=./data/team_task_manager.sqlite
 ```
@@ -45,6 +47,14 @@ npm run dev
 
 The frontend runs on `http://localhost:5173` and the backend runs on `http://localhost:5000`.
 
+4. Optional backend smoke test:
+
+```bash
+npm run smoke
+```
+
+This creates temporary demo users and runs the full auth -> project -> member -> task -> dashboard flow against `http://localhost:5000`.
+
 ## Railway Deployment
 
 1. Push this repository to GitHub.
@@ -53,7 +63,7 @@ The frontend runs on `http://localhost:5173` and the backend runs on `http://loc
 4. Add these environment variables in Railway:
 
 ```bash
-JWT_SECRET=your-long-production-secret
+JWT_SECRET=your-long-production-secret-at-least-32-characters
 NODE_ENV=production
 SQLITE_FILE=./data/team_task_manager.sqlite
 ```
@@ -67,6 +77,13 @@ npm start
 ```
 
 In production, Express serves the React build from `client/dist`. The Railway Volume keeps the SQLite database file persistent across deploys.
+
+## Security Notes
+
+- Passwords are hashed with `bcrypt` using a cost factor of `12`.
+- Auth tokens are stored in browser `sessionStorage`, then revalidated with `/api/auth/me` before the app restores a session.
+- The Express server sends standard security headers through `helmet` and disables the `X-Powered-By` header.
+- Unknown API routes return JSON instead of falling through to the frontend shell.
 
 ## Demo Flow
 

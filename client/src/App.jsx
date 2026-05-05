@@ -19,7 +19,7 @@ import {
   UserCircle,
   UserPlus
 } from 'lucide-react';
-import { api } from './api.js';
+import { api, clearStoredSession, readStoredToken, storeSession } from './api.js';
 
 const emptyTask = {
   title: '',
@@ -31,6 +31,7 @@ const emptyTask = {
 
 const statuses = ['All', 'To Do', 'In Progress', 'Done'];
 const TOUR_VERSION = '2026-05-05';
+const PRODUCT_NAME = 'Project Task Manager';
 const accountRoleOptions = [
   { value: 'Admin', label: 'Admin' },
   { value: 'Member', label: 'User' },
@@ -40,12 +41,11 @@ const accountRoleOptions = [
 function App() {
   const [authMode, setAuthMode] = useState('login');
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '', accountRole: 'Admin' });
-  const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem('teamTaskUser');
-    return stored ? JSON.parse(stored) : null;
-  });
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
   const [activeView, setActiveView] = useState('workspace');
   const [projects, setProjects] = useState([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [tasks, setTasks] = useState([]);
   const [dashboard, setDashboard] = useState(null);
@@ -60,6 +60,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [workspaceMode, setWorkspaceMode] = useState('All');
+  const [projectComposerOpen, setProjectComposerOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
   const [tourBooted, setTourBooted] = useState(false);
@@ -92,6 +93,8 @@ function App() {
   const projectMembers = useMemo(() => selectedProject?.members || [], [selectedProject]);
   const canSwitchWorkspaceMode = availableWorkspaceModes.length > 1;
   const isBusy = (key) => busyAction === key;
+  const hasVisibleProjects = filteredProjects.length > 0;
+  const showProjectComposer = projectComposerOpen || (projectsLoaded && !hasVisibleProjects);
   const workspaceHeading = selectedProject
     ? isAdmin
       ? 'Admin workspace'
@@ -136,11 +139,11 @@ function App() {
         title: 'Your workspace home',
         body: 'This sidebar is the anchor for the whole app. It holds your profile entry point, your projects, and the quickest path back into your daily workflow.'
       },
-      {
-        selector: '[data-tour="profile-button"]',
-        title: 'Profile settings',
-        body: 'Use this button to edit your name, email, password, and account type whenever you need to update your personal details.'
-      },
+        {
+          selector: '[data-tour="profile-chip"]',
+          title: 'Profile settings',
+          body: 'Use this button to edit your name, email, password, and account type whenever you need to update your personal details.'
+        },
       ...(canSwitchWorkspaceMode
         ? [
             {
@@ -193,19 +196,21 @@ function App() {
   const hasTaskFilter = taskSearch.trim().length > 0 || statusFilter !== 'All';
 
   const clearSession = () => {
-    localStorage.removeItem('teamTaskToken');
-    localStorage.removeItem('teamTaskUser');
+    clearStoredSession();
     setUser(null);
     setProjects([]);
+    setProjectsLoaded(false);
     setTasks([]);
     setDashboard(null);
     setSelectedProjectId('');
     setMessage('');
     setBusyAction('');
     setWorkspaceMode('All');
+    setProjectComposerOpen(false);
     setTourOpen(false);
     setTourStep(0);
     setTourBooted(false);
+    setAuthReady(true);
   };
 
   const handleDataError = (error) => {
@@ -217,14 +222,46 @@ function App() {
   };
 
   const saveSession = (payload) => {
-    localStorage.setItem('teamTaskToken', payload.token);
-    localStorage.setItem('teamTaskUser', JSON.stringify(payload.user));
+    storeSession(payload);
     setUser(payload.user);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      const token = readStoredToken();
+      if (!token) {
+        if (!cancelled) setAuthReady(true);
+        return;
+      }
+
+      try {
+        const data = await api('/api/auth/me');
+        if (cancelled) return;
+        saveSession({ token, user: data.user });
+      } catch (error) {
+        clearStoredSession();
+        if (!cancelled) {
+          setUser(null);
+          setMessage(error.status === 401 ? 'Your previous session expired. Please sign in again.' : error.message);
+        }
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadProjects = async () => {
     const data = await api('/api/projects');
     setProjects(data);
+    setProjectsLoaded(true);
     setSelectedProjectId((current) => current || data[0]?._id || '');
   };
 
@@ -288,6 +325,13 @@ function App() {
   }, [activeView, filteredProjects, selectedProjectId, user]);
 
   useEffect(() => {
+    if (activeView !== 'workspace') return;
+    if (projectsLoaded && !hasVisibleProjects) {
+      setProjectComposerOpen(true);
+    }
+  }, [activeView, hasVisibleProjects, projectsLoaded]);
+
+  useEffect(() => {
     if (!user || activeView !== 'workspace' || tourBooted) return;
     const tourKey = `teamTaskTour:${user.id}`;
 
@@ -319,6 +363,18 @@ function App() {
     setTourStep(0);
     setTourOpen(true);
     setTourBooted(true);
+  };
+
+  const openProjectComposer = () => {
+    setActiveView('workspace');
+    setMessage('');
+    setProjectComposerOpen(true);
+  };
+
+  const closeProjectComposer = () => {
+    if (hasVisibleProjects) {
+      setProjectComposerOpen(false);
+    }
   };
 
   const nextTourStep = () => {
@@ -354,11 +410,14 @@ function App() {
     setBusyAction('create-project');
     try {
       const project = await api('/api/projects', { method: 'POST', body: JSON.stringify(projectForm) });
+      const nextMode = workspaceMode === 'Member' ? 'Admin' : workspaceMode;
       setProjects((current) => [project, ...current]);
       setSelectedProjectId(project._id);
       setActiveView('workspace');
+      setWorkspaceMode(nextMode);
+      setProjectComposerOpen(false);
       setProjectForm({ name: '', description: '' });
-      await loadDashboard(workspaceMode);
+      await loadDashboard(nextMode);
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -457,8 +516,7 @@ function App() {
     try {
       const payload = { ...profileForm, password: profileForm.password.trim() };
       const updated = await api('/api/profile', { method: 'PATCH', body: JSON.stringify(payload) });
-      localStorage.setItem('teamTaskToken', updated.token);
-      localStorage.setItem('teamTaskUser', JSON.stringify(updated.user));
+      storeSession(updated);
       setUser(updated.user);
       setProfileForm({ name: updated.user.name, email: updated.user.email, password: '', accountRole: updated.user.accountRole });
       setProfileMessage('Profile updated successfully.');
@@ -473,6 +531,20 @@ function App() {
     clearSession();
   };
 
+  if (!authReady) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <div className="auth-card auth-loading-card">
+            <p className="eyebrow">Checking session</p>
+            <h1>Getting your workspace ready</h1>
+            <p className="muted">We’re verifying your saved session with the server before showing the dashboard.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   if (!user) {
     return (
       <main className="auth-shell">
@@ -481,7 +553,7 @@ function App() {
             <span className="mark">
               <ListChecks size={28} />
             </span>
-            <p className="eyebrow">Team Task Manager</p>
+            <p className="eyebrow">{PRODUCT_NAME}</p>
             <h1>Plan the week with calm, sharp focus.</h1>
             <p className="muted">A polished workspace for project ownership, task clarity, and clean team handoffs.</p>
 
@@ -576,21 +648,16 @@ function App() {
             <ListChecks size={24} />
           </span>
           <div>
-            <strong>Team Tasks</strong>
+            <strong>{PRODUCT_NAME}</strong>
             <span>{user.name} - {accountRoleLabel(user.accountRole)}</span>
           </div>
         </div>
 
         <button
-          className={`sidebar-action ${activeView === 'profile' ? 'active' : ''}`}
-          onClick={() => setActiveView('profile')}
-          data-tour="profile-button"
+          className={`sidebar-action ${activeView === 'workspace' ? 'active' : ''}`}
+          onClick={() => setActiveView('workspace')}
         >
-          <UserCircle size={17} /> Profile settings
-        </button>
-
-        <button type="button" className="ghost wide tour-trigger" onClick={openTour}>
-          <CircleHelp size={16} /> View walkthrough
+          <LayoutDashboard size={17} /> Workspace overview
         </button>
 
         {canSwitchWorkspaceMode && (
@@ -614,27 +681,15 @@ function App() {
           </section>
         )}
 
-        <form onSubmit={createProject} className="create-project" data-tour="create-project">
+        <div className="project-list-header">
           <div className="mini-title">
             <Sparkles size={16} />
-            <span>New project</span>
+            <span>Projects</span>
           </div>
-          <input
-            placeholder="Project name"
-            value={projectForm.name}
-            onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })}
-            required
-          />
-          <textarea
-            placeholder="Short description"
-            value={projectForm.description}
-            onChange={(event) => setProjectForm({ ...projectForm, description: event.target.value })}
-          />
-          <button className={`primary wide ${isBusy('create-project') ? 'is-loading' : ''}`} disabled={isBusy('create-project')} aria-busy={isBusy('create-project')}>
-            {isBusy('create-project') && <span className="button-spinner" aria-hidden="true" />}
-            <Plus size={16} /> {isBusy('create-project') ? 'Creating project...' : 'Create project'}
+          <button type="button" className="ghost small-button" onClick={openProjectComposer}>
+            <Plus size={15} /> New
           </button>
-        </form>
+        </div>
 
         <nav className="project-list" aria-label="Projects" data-tour="project-list">
           {filteredProjects.map((project) => (
@@ -644,6 +699,7 @@ function App() {
               onClick={() => {
                 setSelectedProjectId(project._id);
                 setActiveView('workspace');
+                setProjectComposerOpen(false);
               }}
             >
               <span>{project.name}</span>
@@ -657,9 +713,15 @@ function App() {
           )}
         </nav>
 
-        <button className="ghost logout" onClick={logout}>
-          <LogOut size={16} /> Logout
-        </button>
+        <div className="sidebar-footer-links">
+          <button className="ghost logout" onClick={logout}>
+            <LogOut size={16} /> Logout
+          </button>
+
+          <button type="button" className="ghost wide tour-trigger tour-footer-link" onClick={openTour}>
+            <CircleHelp size={16} /> View walkthrough
+          </button>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -671,39 +733,68 @@ function App() {
             profileMessage={profileMessage}
             updateProfile={updateProfile}
             saving={isBusy('save-profile')}
+            workspaceMode={workspaceMode}
+            openProjectComposer={openProjectComposer}
           />
         ) : (
           <>
             <header className="topbar">
               <div>
                 <p className="eyebrow">{workspaceHeading}</p>
-                <h1>{selectedProject?.name || 'Create your first project'}</h1>
-                <p className="muted">{selectedProject?.description || 'Your dashboard will come alive once a project is created.'}</p>
+                <h1>{selectedProject?.name || 'Launch the next project with clarity'}</h1>
+                <p className="muted">
+                  {selectedProject?.description || 'Create the project first, then assign teammates, tasks, and responsibilities from one clean workspace.'}
+                </p>
               </div>
-              {currentMembership && (
-                <span className="role-pill">
-                  <Shield size={16} /> {currentMembership.role}
-                </span>
-              )}
+              <div className="topbar-actions">
+                <UserAccessButton user={user} onClick={() => setActiveView('profile')} />
+                {currentMembership && (
+                  <span className="role-pill">
+                    <Shield size={16} /> {currentMembership.role}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={openProjectComposer}
+                  data-tour={showProjectComposer ? undefined : 'create-project'}
+                >
+                  <Plus size={16} /> New project
+                </button>
+              </div>
             </header>
 
             {message && <p className="alert">{message}</p>}
 
-            <section className="command-band">
-              <div className="progress-block">
-                <div>
-                  <span>Project progress</span>
-                  <strong>{projectStats.progress}%</strong>
+            {showProjectComposer && (
+              <ProjectComposer
+                projectForm={projectForm}
+                setProjectForm={setProjectForm}
+                createProject={createProject}
+                busy={isBusy('create-project')}
+                onClose={closeProjectComposer}
+                canClose={hasVisibleProjects}
+                tourId={showProjectComposer ? 'create-project' : 'project-composer'}
+              />
+            )}
+
+            {(dashboard?.projectCount || 0) > 0 && (
+              <section className="command-band">
+                <div className="progress-block">
+                  <div>
+                    <span>Project progress</span>
+                    <strong>{projectStats.progress}%</strong>
+                  </div>
+                  <div className="progress-track" aria-label="Project progress">
+                    <span style={{ width: `${projectStats.progress}%` }} />
+                  </div>
                 </div>
-                <div className="progress-track" aria-label="Project progress">
-                  <span style={{ width: `${projectStats.progress}%` }} />
-                </div>
-              </div>
-              <Stat icon={<LayoutDashboard />} label="Projects" value={dashboard?.projectCount || 0} />
-              <Stat icon={<ListChecks />} label="Tasks" value={dashboard?.totalTasks || 0} />
-              <Stat icon={<CheckCircle2 />} label="Done" value={dashboard?.byStatus?.Done || 0} />
-              <Stat icon={<AlertTriangle />} label="Overdue" value={dashboard?.overdue || 0} danger />
-            </section>
+                <Stat icon={<LayoutDashboard />} label="Projects" value={dashboard?.projectCount || 0} />
+                <Stat icon={<ListChecks />} label="Tasks" value={dashboard?.totalTasks || 0} />
+                <Stat icon={<CheckCircle2 />} label="Done" value={dashboard?.byStatus?.Done || 0} />
+                <Stat icon={<AlertTriangle />} label="Overdue" value={dashboard?.overdue || 0} danger />
+              </section>
+            )}
 
             {selectedProject ? (
               <div className="content-grid">
@@ -935,10 +1026,19 @@ function App() {
             ) : (
               <section className="empty-dashboard" data-tour="empty-workspace">
                 <ListChecks size={42} />
-                <h2>Create a project to begin</h2>
-                <p>Use the sidebar form to create the first workspace.</p>
+                <h2>Start with the project, then the rest follows</h2>
+                <p>Create a project in the main canvas to unlock tasks, teammates, workload, and progress tracking.</p>
               </section>
             )}
+
+            <div className="mobile-utility-actions">
+              <button type="button" className="ghost wide tour-trigger" onClick={openTour}>
+                <CircleHelp size={16} /> View walkthrough
+              </button>
+              <button className="ghost wide" onClick={logout}>
+                <LogOut size={16} /> Logout
+              </button>
+            </div>
           </>
         )}
       </section>
@@ -956,58 +1056,171 @@ function App() {
   );
 }
 
-function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile, saving }) {
+function ProfilePage({ user, profileForm, setProfileForm, profileMessage, updateProfile, saving, workspaceMode, openProjectComposer }) {
   return (
     <section className="profile-page">
       <header className="topbar">
         <div>
           <p className="eyebrow">Profile settings</p>
-          <h1>{user.name}</h1>
-          <p className="muted">Update your account details and workspace identity.</p>
+          <h1>Your account hub</h1>
+          <p className="muted">Keep your account details current and jump back into work with the right context.</p>
         </div>
-        <span className="role-pill">
-          <UserCircle size={16} /> {accountRoleLabel(user.accountRole)} account
-        </span>
+        <div className="topbar-actions">
+          <UserAccessButton user={user} active />
+          <span className="role-pill">
+            <UserCircle size={16} /> {accountRoleLabel(user.accountRole)} account
+          </span>
+          <button type="button" className="ghost" onClick={openProjectComposer}>
+            <Plus size={16} /> New project
+          </button>
+        </div>
       </header>
 
-      <form className="panel profile-card" onSubmit={updateProfile}>
-        <div className="profile-avatar">{initials(profileForm.name)}</div>
+      <div className="profile-grid">
+        <section className="panel profile-summary">
+          <div className="profile-avatar">{initials(profileForm.name)}</div>
+          <div className="profile-summary-copy">
+            <h2>{profileForm.name}</h2>
+            <p>{profileForm.email}</p>
+          </div>
+          <div className="profile-summary-meta">
+            <div>
+              <span className="eyebrow">Account access</span>
+              <strong>{accountRoleLabel(profileForm.accountRole)}</strong>
+              <p>Choose whether this login is used for admin work, user work, or both.</p>
+            </div>
+            <div>
+              <span className="eyebrow">Current view</span>
+              <strong>{workspaceMode === 'All' ? 'All work' : workspaceMode === 'Admin' ? 'Admin view' : 'User view'}</strong>
+              <p>Use the workspace toggle to move between the contexts that matter right now.</p>
+            </div>
+          </div>
+        </section>
+
+        <form className="panel profile-form" onSubmit={updateProfile}>
+          <div className="profile-form-header">
+            <div>
+              <p className="eyebrow">Edit details</p>
+              <h2>Update your information</h2>
+            </div>
+          </div>
+          <div className="profile-form-grid">
+            <label>
+              Name
+              <input value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} required />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                value={profileForm.email}
+                onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })}
+                required
+              />
+            </label>
+            <label>
+              Account type
+              <select value={profileForm.accountRole} onChange={(event) => setProfileForm({ ...profileForm, accountRole: event.target.value })}>
+                <option value="Admin">Admin</option>
+                <option value="Member">User</option>
+                <option value="Both">Admin + User</option>
+              </select>
+            </label>
+            <label>
+              New password
+              <input
+                type="password"
+                minLength="6"
+                placeholder="Leave blank to keep current password"
+                value={profileForm.password}
+                onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })}
+              />
+            </label>
+          </div>
+          {profileMessage && <p className={profileMessage.includes('success') ? 'success' : 'alert'}>{profileMessage}</p>}
+          <button className={`primary profile-submit ${saving ? 'is-loading' : ''}`} disabled={saving} aria-busy={saving}>
+            {saving && <span className="button-spinner" aria-hidden="true" />}
+            <Save size={16} /> {saving ? 'Saving profile...' : 'Save profile changes'}
+          </button>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function UserAccessButton({ user, active = false, onClick }) {
+  const content = (
+    <>
+      <span className="user-chip-avatar">{initials(user.name)}</span>
+      <span className="user-chip-copy">
+        <strong>{user.name}</strong>
+        <small>Profile settings</small>
+      </span>
+    </>
+  );
+
+  if (active) {
+    return (
+      <div className="user-chip active" data-tour="profile-chip" aria-current="page">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="user-chip"
+      onClick={onClick}
+      data-tour="profile-chip"
+    >
+      {content}
+    </button>
+  );
+}
+
+function ProjectComposer({ projectForm, setProjectForm, createProject, busy, onClose, canClose, tourId }) {
+  return (
+    <section className="panel composer-panel" data-tour={tourId}>
+      <div className="composer-copy">
+        <div>
+          <p className="eyebrow">New project</p>
+          <h2>Make project creation the first move</h2>
+        </div>
+        <p>
+          Start with the workspace name and a short brief. Once the project exists, you can add teammates, assign tasks, and track delivery from one place.
+        </p>
+      </div>
+
+      <form className="composer-form" onSubmit={createProject}>
         <label>
-          Name
-          <input value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} required />
-        </label>
-        <label>
-          Email
+          Project name
           <input
-            type="email"
-            value={profileForm.email}
-            onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })}
+            placeholder="Website launch"
+            value={projectForm.name}
+            onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })}
             required
           />
         </label>
         <label>
-          Account type
-          <select value={profileForm.accountRole} onChange={(event) => setProfileForm({ ...profileForm, accountRole: event.target.value })}>
-            <option value="Admin">Admin</option>
-            <option value="Member">User</option>
-            <option value="Both">Admin + User</option>
-          </select>
-        </label>
-        <label>
-          New password
-          <input
-            type="password"
-            minLength="6"
-            placeholder="Leave blank to keep current password"
-            value={profileForm.password}
-            onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })}
+          Short description
+          <textarea
+            placeholder="What is this project trying to ship?"
+            value={projectForm.description}
+            onChange={(event) => setProjectForm({ ...projectForm, description: event.target.value })}
           />
         </label>
-        {profileMessage && <p className={profileMessage.includes('success') ? 'success' : 'alert'}>{profileMessage}</p>}
-        <button className={`primary profile-submit ${saving ? 'is-loading' : ''}`} disabled={saving} aria-busy={saving}>
-          {saving && <span className="button-spinner" aria-hidden="true" />}
-          <Save size={16} /> {saving ? 'Saving profile...' : 'Save profile changes'}
-        </button>
+        <div className="composer-actions">
+          {canClose && (
+            <button type="button" className="ghost" onClick={onClose}>
+              Keep current workspace
+            </button>
+          )}
+          <button className={`primary ${busy ? 'is-loading' : ''}`} disabled={busy} aria-busy={busy}>
+            {busy && <span className="button-spinner" aria-hidden="true" />}
+            <Plus size={16} /> {busy ? 'Creating project...' : 'Create project'}
+          </button>
+        </div>
       </form>
     </section>
   );

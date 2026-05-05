@@ -233,6 +233,11 @@ function App() {
     setUser(payload.user);
   };
 
+  const updateAuthField = (field, value) => {
+    setMessage('');
+    setAuthForm((current) => ({ ...current, [field]: value }));
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -244,14 +249,14 @@ function App() {
       }
 
       try {
-      const data = await api('/api/auth/me');
-      if (cancelled) return;
-      saveSession({ token, user: data.user });
+        const data = await api('/api/auth/me');
+        if (cancelled) return;
+        saveSession({ token, user: data.user });
       } catch (error) {
         clearStoredSession();
         if (!cancelled) {
           setUser(null);
-          setMessage(error.status === 401 ? 'Your previous session expired. Please sign in again.' : error.message);
+          setMessage(error.status === 401 ? '' : error.message);
         }
       } finally {
         if (!cancelled) setAuthReady(true);
@@ -588,10 +593,24 @@ function App() {
 
           <form onSubmit={submitAuth} className="auth-card">
             <div className="segmented" role="tablist" aria-label="Authentication mode">
-              <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>
+              <button
+                type="button"
+                className={authMode === 'login' ? 'active' : ''}
+                onClick={() => {
+                  setMessage('');
+                  setAuthMode('login');
+                }}
+              >
                 Login
               </button>
-              <button type="button" className={authMode === 'signup' ? 'active' : ''} onClick={() => setAuthMode('signup')}>
+              <button
+                type="button"
+                className={authMode === 'signup' ? 'active' : ''}
+                onClick={() => {
+                  setMessage('');
+                  setAuthMode('signup');
+                }}
+              >
                 Signup
               </button>
             </div>
@@ -600,7 +619,7 @@ function App() {
               <>
                 <label>
                   Name
-                  <input value={authForm.name} onChange={(event) => setAuthForm({ ...authForm, name: event.target.value })} required />
+                  <input value={authForm.name} onChange={(event) => updateAuthField('name', event.target.value)} required />
                 </label>
                 <label>
                   Account type
@@ -610,7 +629,7 @@ function App() {
                         key={option.value}
                         type="button"
                         className={authForm.accountRole === option.value ? 'selected' : ''}
-                        onClick={() => setAuthForm({ ...authForm, accountRole: option.value })}
+                        onClick={() => updateAuthField('accountRole', option.value)}
                       >
                         {option.label}
                       </button>
@@ -625,7 +644,7 @@ function App() {
               <input
                 type="email"
                 value={authForm.email}
-                onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })}
+                onChange={(event) => updateAuthField('email', event.target.value)}
                 required
               />
             </label>
@@ -634,7 +653,7 @@ function App() {
               <input
                 type="password"
                 value={authForm.password}
-                onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })}
+                onChange={(event) => updateAuthField('password', event.target.value)}
                 minLength="6"
                 required
               />

@@ -81,6 +81,25 @@ function App() {
   }, [tasks, statusFilter, taskSearch]);
   const hasTaskFilter = taskSearch.trim().length > 0 || statusFilter !== 'All';
 
+  const clearSession = () => {
+    localStorage.removeItem('teamTaskToken');
+    localStorage.removeItem('teamTaskUser');
+    setUser(null);
+    setProjects([]);
+    setTasks([]);
+    setDashboard(null);
+    setSelectedProjectId('');
+    setMessage('');
+  };
+
+  const handleDataError = (error) => {
+    if (error.status === 401) {
+      clearSession();
+      return;
+    }
+    setMessage(error.message);
+  };
+
   const saveSession = (payload) => {
     localStorage.setItem('teamTaskToken', payload.token);
     localStorage.setItem('teamTaskUser', JSON.stringify(payload.user));
@@ -107,14 +126,14 @@ function App() {
 
   useEffect(() => {
     if (!user) return;
-    Promise.all([loadProjects(), loadDashboard()]).catch((error) => setMessage(error.message));
+    Promise.all([loadProjects(), loadDashboard()]).catch(handleDataError);
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
     setTaskSearch('');
     setStatusFilter('All');
-    loadTasks(selectedProjectId).catch((error) => setMessage(error.message));
+    loadTasks(selectedProjectId).catch(handleDataError);
   }, [selectedProjectId, user]);
 
   const submitAuth = async (event) => {
@@ -215,13 +234,7 @@ function App() {
   };
 
   const logout = () => {
-    localStorage.removeItem('teamTaskToken');
-    localStorage.removeItem('teamTaskUser');
-    setUser(null);
-    setProjects([]);
-    setTasks([]);
-    setDashboard(null);
-    setSelectedProjectId('');
+    clearSession();
   };
 
   if (!user) {

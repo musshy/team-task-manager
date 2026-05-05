@@ -155,9 +155,9 @@ h2 {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: linear-gradient(135deg, #f8e8c7, #c39238);
-  color: #142119;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  background: linear-gradient(135deg, #1f6b4b, #123e2e);
+  color: #ffffff;
+  box-shadow: 0 14px 34px rgba(31, 91, 66, 0.28);
 }
 
 .auth-preview {
